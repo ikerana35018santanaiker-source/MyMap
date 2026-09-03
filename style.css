@@ -112,6 +112,46 @@ body{
   bottom: 76px;
 }
 
+.icon-btn.floating.draw{
+  bottom: 128px;
+}
+
+#draw-menu{
+  position: absolute;
+  bottom: 128px;
+  right: 68px;
+  background: var(--bg);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 600;
+  min-width: 170px;
+}
+
+.floating-pill{
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg);
+  border: none;
+  border-radius: 20px;
+  padding: 10px 18px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--accent);
+  box-shadow: var(--shadow-lg);
+  cursor: pointer;
+  z-index: 700;
+}
+
+.floating-pill:hover{
+  background: var(--bg-soft);
+}
+
 #layers-menu{
   position: absolute;
   bottom: 76px;
@@ -255,6 +295,19 @@ body{
   color: var(--accent-dark);
 }
 
+#open-now-toggle-row{
+  padding: 0 16px 12px;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+#open-now-toggle-row label{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
 /* ===== Listas de resultados / historial ===== */
 #history-list, #results-list, .suggestion-list, #route-steps, #measure-points{
   list-style: none;
@@ -340,6 +393,20 @@ body{
 
 .fav-star{
   color: #f4b400;
+}
+
+.result-walk-time{
+  color: var(--accent-dark);
+  font-weight: 600;
+}
+
+#data-tools-row{
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 16px 4px;
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
 }
 
 /* ===== Panel de lugar (detalle + fotos) ===== */
@@ -502,6 +569,21 @@ body{
   padding-top: 12px;
 }
 
+#place-qr-container{
+  display: flex;
+  justify-content: center;
+  padding: 16px 0;
+}
+
+#place-qr-container.visible{
+  display: flex;
+}
+
+#place-qr-container canvas{
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
 /* ===== Rutas ===== */
 #directions-inputs{
   position: relative;
@@ -577,8 +659,20 @@ body{
 .stop-row{
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   padding: 6px 0;
+}
+
+.stop-row.dragging{
+  opacity: 0.4;
+}
+
+.stop-drag-handle{
+  cursor: grab;
+  color: var(--ink-soft);
+  font-size: 14px;
+  min-width: 14px;
+  user-select: none;
 }
 
 .stop-row .dot{
@@ -675,6 +769,64 @@ body{
   display: flex;
   gap: 8px;
   padding: 8px 16px 12px;
+}
+
+#route-options-row{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 16px 12px;
+  flex-wrap: wrap;
+}
+
+#depart-time-label{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+#depart-time-input{
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--bg);
+}
+
+#route-type-toggle{
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  overflow: hidden;
+}
+
+.route-type-btn{
+  border: none;
+  background: var(--bg);
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--ink-soft);
+}
+
+.route-type-btn:hover{
+  background: var(--bg-soft);
+}
+
+.route-type-btn.active{
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+#depart-summary{
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  padding: 0 2px;
 }
 
 .profile-btn{

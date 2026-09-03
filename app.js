@@ -22,7 +22,15 @@ const state = {
   history: JSON.parse(localStorage.getItem('map_history') || '[]'),
   favorites: JSON.parse(localStorage.getItem('map_favorites') || '[]'),
   cycleLayer: null,
-  currentPlace: null
+  currentPlace: null,
+  routeType: 'fastest',       // fastest | shortest
+  departTime: null,
+  drawingPolygon: false,
+  polygonPoints: [],
+  polygonLayer: null,
+  searchCache: new Map(),     // query -> resultados (evita repetir llamadas a Nominatim)
+  userLocation: null,
+  markerCluster: null
 };
 
 // ---------- Inicialización del mapa ----------
@@ -92,6 +100,131 @@ document.querySelectorAll('.layer-option').forEach(btn => {
 document.addEventListener('click', (e) => {
   if (!layersMenu.hidden && !e.target.closest('#layers-menu') && !e.target.closest('#layers-btn')) {
     layersMenu.hidden = true;
+  }
+});
+
+/* ==========================================================
+   DIBUJAR ZONA (polígono a mano)
+   ========================================================== */
+const drawBtn = document.getElementById('draw-btn');
+const drawMenu = document.getElementById('draw-menu');
+const drawStartBtn = document.getElementById('draw-start-btn');
+const drawFinishBtn = document.getElementById('draw-finish-btn');
+const drawClearBtn = document.getElementById('draw-clear-btn');
+
+drawBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  drawMenu.hidden = !drawMenu.hidden;
+});
+
+document.addEventListener('click', (e) => {
+  if (!drawMenu.hidden && !e.target.closest('#draw-menu') && !e.target.closest('#draw-btn')) {
+    drawMenu.hidden = true;
+  }
+});
+
+drawStartBtn.addEventListener('click', () => {
+  state.drawingPolygon = true;
+  state.polygonPoints = [];
+  clearPolygon();
+  map.getContainer().style.cursor = 'crosshair';
+  drawFinishBtn.hidden = false;
+  showToast('Haz clic en el mapa para trazar la zona. Termina con "Terminar zona".', 3000);
+  drawMenu.hidden = true;
+});
+
+drawFinishBtn.addEventListener('click', () => {
+  finishPolygon();
+});
+
+drawClearBtn.addEventListener('click', () => {
+  clearPolygon();
+  drawMenu.hidden = true;
+});
+
+map.on('click', (e) => {
+  if (!state.drawingPolygon) return;
+  state.polygonPoints.push([e.latlng.lat, e.latlng.lng]);
+  redrawPolygonPreview();
+});
+
+function redrawPolygonPreview() {
+  if (state.polygonLayer) map.removeLayer(state.polygonLayer);
+  if (state.polygonPoints.length < 2) {
+    if (state.polygonPoints.length === 1) {
+      state.polygonLayer = L.circleMarker(state.polygonPoints[0], { radius: 5, color: '#1a73e8' }).addTo(map);
+    }
+    return;
+  }
+  state.polygonLayer = L.polyline(state.polygonPoints, { color: '#1a73e8', weight: 3, dashArray: '6 6' }).addTo(map);
+}
+
+function finishPolygon() {
+  state.drawingPolygon = false;
+  map.getContainer().style.cursor = '';
+  drawFinishBtn.hidden = true;
+
+  if (state.polygonPoints.length < 3) {
+    showToast('Necesitas al menos 3 puntos para una zona.');
+    clearPolygon();
+    return;
+  }
+
+  if (state.polygonLayer) map.removeLayer(state.polygonLayer);
+
+  const areaKm2 = polygonArea(state.polygonPoints);
+  state.polygonLayer = L.polygon(state.polygonPoints, {
+    color: '#1a73e8',
+    weight: 3,
+    fillColor: '#1a73e8',
+    fillOpacity: 0.15
+  }).addTo(map).bindPopup(`Zona dibujada — área aprox: ${areaKm2.toFixed(2)} km²`);
+
+  state.polygonLayer.openPopup();
+}
+
+function clearPolygon() {
+  if (state.polygonLayer) {
+    map.removeLayer(state.polygonLayer);
+    state.polygonLayer = null;
+  }
+  state.polygonPoints = [];
+}
+
+// Fórmula del área de un polígono esférico (aproximación shoelace en km²)
+function polygonArea(points) {
+  const R = 6371;
+  let area = 0;
+  const rad = (d) => d * Math.PI / 180;
+
+  for (let i = 0; i < points.length; i++) {
+    const [lat1, lon1] = points[i];
+    const [lat2, lon2] = points[(i + 1) % points.length];
+    area += rad(lon2 - lon1) * (2 + Math.sin(rad(lat1)) + Math.sin(rad(lat2)));
+  }
+  return Math.abs(area * R * R / 2);
+}
+
+/* ==========================================================
+   BUSCAR EN ESTA ÁREA (tras mover el mapa)
+   ========================================================== */
+const searchAreaBtn = document.getElementById('search-area-btn');
+let lastSearchCenter = map.getCenter();
+let hasActiveCategorySearch = false;
+
+map.on('moveend', () => {
+  if (!hasActiveCategorySearch) return;
+  const center = map.getCenter();
+  const moved = haversine(lastSearchCenter.lat, lastSearchCenter.lng, center.lat, center.lng);
+  searchAreaBtn.hidden = moved < 0.3; // mostrar solo si se movió más de 300m
+});
+
+searchAreaBtn.addEventListener('click', () => {
+  searchAreaBtn.hidden = true;
+  lastSearchCenter = map.getCenter();
+  const activeChip = document.querySelector('.chip.active');
+  if (activeChip) {
+    searchNearbyCategory(activeChip.dataset.cat, activeChip.textContent.trim());
   }
 });
 
@@ -337,10 +470,19 @@ document.getElementById('search-form').addEventListener('submit', (e) => {
 });
 
 async function runSearch(query) {
+  if (state.searchCache.has(query)) {
+    renderResults(state.searchCache.get(query));
+    return;
+  }
   try {
     const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&addressdetails=1&extratags=1&limit=10`;
     const res = await fetch(url, { headers: { 'Accept-Language': 'es' } });
     const data = await res.json();
+    state.searchCache.set(query, data);
+    // Limitar tamaño de caché para no crecer sin límite
+    if (state.searchCache.size > 40) {
+      state.searchCache.delete(state.searchCache.keys().next().value);
+    }
     renderResults(data);
   } catch (err) {
     console.error(err);
@@ -367,11 +509,12 @@ function renderResults(results) {
   results.forEach(r => {
     const li = el('li');
     const btn = el('button', 'list-item');
+    const walkInfo = walkEstimateHTML(parseFloat(r.lat), parseFloat(r.lon));
     btn.innerHTML = `
       <span class="list-icon">${categoryIcon(r)}</span>
       <span class="list-text">
         <span class="list-title">${r.display_name.split(',')[0]}</span>
-        <span class="list-subtitle">${r.display_name.split(',').slice(1, 3).join(',').trim()}</span>
+        <span class="list-subtitle">${r.display_name.split(',').slice(1, 3).join(',').trim()}${walkInfo}</span>
       </span>
     `;
     btn.addEventListener('click', () => openPlace(r));
@@ -384,6 +527,14 @@ function renderResults(results) {
   }
 }
 
+// Estimación rápida de tiempo a pie (línea recta / 5 km/h), no es una ruta real.
+function walkEstimateHTML(lat, lon) {
+  if (!state.userLocation) return '';
+  const dist = haversine(state.userLocation.lat, state.userLocation.lon, lat, lon);
+  const minutes = Math.round((dist / 5) * 60);
+  return ` · <span class="result-walk-time">🚶 ${minutes} min (${formatDistance(dist)})</span>`;
+}
+
 /* ==========================================================
    CATEGORÍAS CERCANAS (Overpass API)
    ========================================================== */
@@ -394,12 +545,27 @@ document.querySelectorAll('.chip').forEach(chip => {
     const alreadyActive = chip.classList.contains('active');
     document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
     clearCategoryLayer();
+    searchAreaBtn.hidden = true;
 
-    if (alreadyActive) return;
+    if (alreadyActive) {
+      hasActiveCategorySearch = false;
+      document.getElementById('open-now-toggle-row').hidden = true;
+      return;
+    }
 
     chip.classList.add('active');
+    hasActiveCategorySearch = true;
+    lastSearchCenter = map.getCenter();
+    document.getElementById('open-now-toggle-row').hidden = false;
     searchNearbyCategory(chip.dataset.cat, chip.textContent.trim());
   });
+});
+
+document.getElementById('open-now-toggle').addEventListener('change', () => {
+  const activeChip = document.querySelector('.chip.active');
+  if (activeChip && state.lastOverpassElements) {
+    renderOverpassResults(state.lastOverpassElements, activeChip.dataset.cat);
+  }
 });
 
 function clearCategoryLayer() {
@@ -440,28 +606,63 @@ async function searchNearbyCategory(cat, label) {
       body: 'data=' + encodeURIComponent(query)
     });
     const data = await res.json();
+    state.lastOverpassElements = data.elements;
     renderOverpassResults(data.elements, cat);
   } catch (err) {
     console.error(err);
-    showToast('No se pudo consultar lugares cercanos.');
+    showToast('El servidor de lugares cercanos está saturado, prueba de nuevo en unos segundos.');
+    resultsList.innerHTML = '<li class="hint">No se pudo consultar lugares cercanos (servidor público ocupado).</li>';
   }
+}
+
+// Heurística simple de "abierto ahora" para el formato más común de
+// opening_hours de OSM (ej. "Mo-Fr 09:00-18:00; Sa 10:00-14:00").
+// No cubre todos los casos del estándar OSM, que es muy amplio.
+function isLikelyOpenNow(openingHours) {
+  if (!openingHours) return null; // desconocido
+  if (/24\/7/i.test(openingHours)) return true;
+
+  const days = ['su', 'mo', 'tu', 'we', 'th', 'fr', 'sa'];
+  const now = new Date();
+  const todayCode = days[now.getDay()];
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+
+  const rules = openingHours.split(';').map(r => r.trim());
+  for (const rule of rules) {
+    const match = rule.match(/^([a-zA-Z,\-]+)\s+(\d{2}):(\d{2})-(\d{2}):(\d{2})$/);
+    if (!match) continue;
+    const [, dayPart, h1, m1, h2, m2] = match;
+    if (!dayPart.toLowerCase().includes(todayCode)) continue;
+    const start = parseInt(h1) * 60 + parseInt(m1);
+    const end = parseInt(h2) * 60 + parseInt(m2);
+    if (nowMinutes >= start && nowMinutes <= end) return true;
+    return false;
+  }
+  return null; // no se pudo interpretar
 }
 
 function renderOverpassResults(elements, cat) {
   clearCategoryLayer();
   const icon = { restaurant: '🍽️', fuel: '⛽', pharmacy: '💊', cafe: '☕', supermarket: '🛒', atm: '🏧' }[cat] || '📍';
 
+  const onlyOpen = document.getElementById('open-now-toggle').checked;
+  let filtered = elements;
+  if (onlyOpen) {
+    filtered = elements.filter(e => isLikelyOpenNow(e.tags?.opening_hours) !== false);
+  }
+
   const markers = [];
   resultsList.innerHTML = '';
 
-  if (!elements.length) {
+  if (!filtered.length) {
     resultsList.innerHTML = '<li class="hint">No se encontraron lugares cercanos.</li>';
     return;
   }
 
-  elements.forEach(e => {
+  filtered.forEach(e => {
     const name = e.tags?.name || 'Sin nombre';
     const lat = e.lat, lon = e.lon;
+    const openStatus = isLikelyOpenNow(e.tags?.opening_hours);
 
     const marker = L.marker([lat, lon], {
       icon: L.divIcon({
@@ -475,11 +676,16 @@ function renderOverpassResults(elements, cat) {
 
     const li = el('li');
     const btn = el('button', 'list-item');
+    const statusHTML = openStatus === true
+      ? ' · <span style="color:#188038;font-weight:600;">Abierto</span>'
+      : openStatus === false
+        ? ' · <span style="color:#d93025;font-weight:600;">Cerrado</span>'
+        : '';
     btn.innerHTML = `
       <span class="list-icon">${icon}</span>
       <span class="list-text">
         <span class="list-title">${name}</span>
-        <span class="list-subtitle">${e.tags?.['addr:street'] || 'Ubicación cercana'}</span>
+        <span class="list-subtitle">${e.tags?.['addr:street'] || 'Ubicación cercana'}${statusHTML}</span>
       </span>
     `;
     btn.addEventListener('click', () => {
@@ -488,14 +694,22 @@ function renderOverpassResults(elements, cat) {
       openPlace({
         display_name: name,
         lat, lon,
-        type: cat
+        type: cat,
+        extratags: { opening_hours: e.tags?.opening_hours }
       });
     });
     li.appendChild(btn);
     resultsList.appendChild(li);
   });
 
-  state.categoryLayer = L.layerGroup(markers).addTo(map);
+  // Usar clusters si hay disponible el plugin (muchos marcadores)
+  if (window.L && L.markerClusterGroup) {
+    const cluster = L.markerClusterGroup({ maxClusterRadius: 50 });
+    markers.forEach(m => cluster.addLayer(m));
+    state.categoryLayer = cluster.addTo(map);
+  } else {
+    state.categoryLayer = L.layerGroup(markers).addTo(map);
+  }
 }
 
 /* ==========================================================
@@ -520,6 +734,11 @@ async function openPlace(result) {
 
   renderOpeningHours(result.extratags?.opening_hours);
 
+  const qrContainer = document.getElementById('place-qr-container');
+  qrContainer.classList.remove('visible');
+  qrContainer.hidden = true;
+  qrContainer.innerHTML = '';
+
   // Mostrar panel de lugar por encima del panel activo
   Object.values(panels).forEach(p => p.hidden = true);
   panels.place.hidden = false;
@@ -537,10 +756,14 @@ function renderOpeningHours(raw) {
     hoursEl.innerHTML = '';
     return;
   }
-  // Heurística simple: no interpretamos el horario completo (formato OSM
-  // es complejo), solo mostramos el texto crudo con un icono de reloj.
+  const status = isLikelyOpenNow(raw);
+  const statusHTML = status === true
+    ? '<span class="status-open">Abierto ahora</span> · '
+    : status === false
+      ? '<span class="status-closed">Cerrado ahora</span> · '
+      : '';
   hoursEl.classList.add('visible');
-  hoursEl.innerHTML = `🕐 <span>${raw}</span>`;
+  hoursEl.innerHTML = `🕐 <span>${statusHTML}${raw}</span>`;
 }
 
 document.getElementById('place-back').addEventListener('click', () => {
@@ -566,13 +789,38 @@ document.getElementById('place-drive-btn').addEventListener('click', () => goToD
 
 document.getElementById('place-share-btn').addEventListener('click', () => {
   if (!state.currentPlace) return;
-  const { lat, lon, name } = state.currentPlace;
-  const url = `${location.origin}${location.pathname}?lat=${lat}&lon=${lon}&z=17&label=${encodeURIComponent(name)}`;
+  const url = buildShareURL(state.currentPlace);
   navigator.clipboard?.writeText(url).then(() => {
     showToast('Enlace copiado al portapapeles');
   }).catch(() => {
     prompt('Copia este enlace:', url);
   });
+});
+
+function buildShareURL(place) {
+  const { lat, lon, name } = place;
+  return `${location.origin}${location.pathname}?lat=${lat}&lon=${lon}&z=17&label=${encodeURIComponent(name)}`;
+}
+
+// Generamos el QR con un servicio público gratuito (sin API key) que
+// devuelve directamente la imagen PNG a partir de la URL codificada.
+document.getElementById('place-qr-btn').addEventListener('click', () => {
+  const container = document.getElementById('place-qr-container');
+  const isVisible = container.classList.contains('visible');
+
+  if (isVisible) {
+    container.classList.remove('visible');
+    container.hidden = true;
+    return;
+  }
+
+  if (!state.currentPlace) return;
+  const url = buildShareURL(state.currentPlace);
+  const qrImgUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(url)}`;
+
+  container.innerHTML = `<img src="${qrImgUrl}" width="220" height="220" alt="Código QR de ${state.currentPlace.name}" style="border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,0.12);" />`;
+  container.hidden = false;
+  container.classList.add('visible');
 });
 
 async function loadPlacePhotos(name) {
@@ -754,7 +1002,9 @@ function addStopField() {
   const stopId = 'stop_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
   const row = el('div', 'stop-row');
   row.dataset.stopId = stopId;
+  row.draggable = true;
   row.innerHTML = `
+    <span class="stop-drag-handle" title="Arrastra para reordenar">⠿</span>
     <span class="dot"></span>
     <input type="text" placeholder="Añadir parada" autocomplete="off" />
     <button class="stop-remove" aria-label="Quitar parada">✕</button>
@@ -778,9 +1028,36 @@ function addStopField() {
     maybeDrawRoute();
   });
 
+  // Reordenar arrastrando la fila (drag & drop nativo del navegador)
+  row.addEventListener('dragstart', () => {
+    row.classList.add('dragging');
+  });
+
+  row.addEventListener('dragend', () => {
+    row.classList.remove('dragging');
+    syncStopsOrderFromDOM();
+    maybeDrawRoute();
+  });
+
+  row.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    const draggingRow = stopsContainer.querySelector('.stop-row.dragging');
+    if (!draggingRow || draggingRow === row) return;
+    const rect = row.getBoundingClientRect();
+    const isAfter = e.clientY > rect.top + rect.height / 2;
+    stopsContainer.insertBefore(draggingRow, isAfter ? row.nextSibling : row);
+  });
+
   stopsContainer.appendChild(row);
   state.stops.push({ id: stopId, coords: null, input, row });
   input.focus();
+}
+
+// Tras arrastrar una fila, el DOM tiene el nuevo orden visual;
+// reconstruimos state.stops para que coincida.
+function syncStopsOrderFromDOM() {
+  const orderedIds = [...stopsContainer.querySelectorAll('.stop-row')].map(r => r.dataset.stopId);
+  state.stops.sort((a, b) => orderedIds.indexOf(a.id) - orderedIds.indexOf(b.id));
 }
 
 document.querySelectorAll('.profile-btn').forEach(btn => {
@@ -790,6 +1067,24 @@ document.querySelectorAll('.profile-btn').forEach(btn => {
     state.activeProfile = btn.dataset.profile;
     maybeDrawRoute();
   });
+});
+
+/* ---- Tipo de ruta: más rápida / más corta ---- */
+document.querySelectorAll('.route-type-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.route-type-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    state.routeType = btn.dataset.type;
+    maybeDrawRoute();
+  });
+});
+
+/* ---- Hora de salida (simulada con la duración fija de OSRM) ---- */
+document.getElementById('depart-time-input').addEventListener('change', (e) => {
+  state.departTime = e.target.value || null;
+  if (state.currentRoute) {
+    renderRouteSummary(state.currentRoute);
+  }
 });
 
 function maybeDrawRoute() {
@@ -828,12 +1123,20 @@ async function drawRoute(origin, dest, profile, viaOverride) {
       return;
     }
 
-    state.routeAlternatives = data.routes;
+    // OSRM público no soporta un parámetro directo "shortest"; cuando el
+    // usuario elige "más corta" y hay varias alternativas, las reordenamos
+    // por distancia en vez de por duración (que es el orden que da OSRM).
+    let routes = data.routes;
+    if (state.routeType === 'shortest' && routes.length > 1) {
+      routes = [...routes].sort((a, b) => a.distance - b.distance);
+    }
+
+    state.routeAlternatives = routes;
     state.selectedAltIndex = 0;
     state.currentWaypoints = waypoints;
 
-    renderAlternatives(data.routes, alternatives);
-    renderRoute(data.routes[0], waypoints);
+    renderAlternatives(routes, alternatives);
+    renderRoute(routes[0], waypoints);
   } catch (err) {
     console.error(err);
     showToast('No se pudo calcular la ruta.');
@@ -927,6 +1230,22 @@ function enableRouteDragging(line, waypoints) {
   map.on('mouseup', map._routeDragHandler);
 }
 
+// Calcula una hora de llegada aproximada sumando la duración de OSRM a
+// la hora de salida elegida por el usuario. Es una estimación simple:
+// no tiene en cuenta tráfico real (no existe una fuente gratuita fiable).
+function arrivalTimeHTML(durationSeconds) {
+  if (!state.departTime) return '';
+
+  const [h, m] = state.departTime.split(':').map(Number);
+  const depart = new Date();
+  depart.setHours(h, m, 0, 0);
+
+  const arrival = new Date(depart.getTime() + durationSeconds * 1000);
+  const arrivalStr = arrival.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+
+  return `<div class="summary-dist">Llegada estimada: ${arrivalStr}</div>`;
+}
+
 function clearRoute() {
   if (state.routeLayer) {
     map.removeLayer(state.routeLayer);
@@ -945,6 +1264,7 @@ function renderRouteSummary(route) {
   summary.innerHTML = `
     <div class="summary-time">${formatDuration(route.duration)}</div>
     <div class="summary-dist">${formatDistance(route.distance / 1000)}</div>
+    ${arrivalTimeHTML(route.duration)}
   `;
 
   const stepsList = document.getElementById('route-steps');
@@ -1133,6 +1453,7 @@ document.getElementById('locate-btn').addEventListener('click', () => {
   navigator.geolocation.getCurrentPosition(
     (pos) => {
       const { latitude, longitude } = pos.coords;
+      state.userLocation = { lat: latitude, lon: longitude };
       map.setView([latitude, longitude], 16);
       placeMarker(latitude, longitude, 'Estás aquí');
 
@@ -1145,6 +1466,20 @@ document.getElementById('locate-btn').addEventListener('click', () => {
     () => showToast('No se pudo obtener tu ubicación.')
   );
 });
+
+// Intentar obtener la ubicación de forma silenciosa al cargar, solo para
+// poder mostrar distancias/tiempos a pie en los resultados de búsqueda.
+// Si el navegador ya tiene permiso concedido, no habrá prompt visible;
+// si no, simplemente no se rellena y los resultados no muestran esa info.
+if (navigator.geolocation && navigator.permissions?.query) {
+  navigator.permissions.query({ name: 'geolocation' }).then(status => {
+    if (status.state === 'granted') {
+      navigator.geolocation.getCurrentPosition(pos => {
+        state.userLocation = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+      });
+    }
+  }).catch(() => {});
+}
 
 /* ==========================================================
    Cerrar sugerencias al hacer clic fuera
@@ -1164,4 +1499,116 @@ if ('serviceWorker' in navigator) {
       console.warn('No se pudo registrar el service worker:', err);
     });
   });
+}
+
+/* ==========================================================
+   EXPORTAR / IMPORTAR DATOS (favoritos + historial) como JSON
+   ========================================================== */
+document.getElementById('export-data-btn').addEventListener('click', () => {
+  const backup = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    favorites: state.favorites,
+    history: state.history
+  };
+  downloadFile('mapa-datos.json', JSON.stringify(backup, null, 2));
+  showToast('Datos exportados');
+});
+
+const importDataBtn = document.getElementById('import-data-btn');
+const importDataFile = document.getElementById('import-data-file');
+
+importDataBtn.addEventListener('click', () => importDataFile.click());
+
+importDataFile.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  try {
+    const text = await file.text();
+    const parsed = JSON.parse(text);
+
+    if (!Array.isArray(parsed.favorites) || !Array.isArray(parsed.history)) {
+      showToast('El archivo no tiene el formato esperado.');
+      return;
+    }
+
+    // Fusionamos con lo existente en vez de sobrescribir, evitando duplicados
+    const existingFavKeys = new Set(state.favorites.map(f => `${f.lat},${f.lon}`));
+    parsed.favorites.forEach(f => {
+      const key = `${f.lat},${f.lon}`;
+      if (!existingFavKeys.has(key)) {
+        state.favorites.push(f);
+        existingFavKeys.add(key);
+      }
+    });
+    state.favorites = state.favorites.slice(0, 20);
+
+    const existingHistNames = new Set(state.history.map(h => h.display_name));
+    parsed.history.forEach(h => {
+      if (!existingHistNames.has(h.display_name)) {
+        state.history.push(h);
+        existingHistNames.add(h.display_name);
+      }
+    });
+    state.history = state.history.slice(0, 8);
+
+    localStorage.setItem('map_favorites', JSON.stringify(state.favorites));
+    localStorage.setItem('map_history', JSON.stringify(state.history));
+    renderFavorites();
+    renderHistory();
+    showToast('Datos importados correctamente');
+  } catch (err) {
+    console.error(err);
+    showToast('No se pudo leer el archivo JSON.');
+  } finally {
+    importDataFile.value = '';
+  }
+});
+
+/* ==========================================================
+   IMPORTAR GPX Y MOSTRARLO EN EL MAPA
+   ========================================================== */
+const importGpxBtn = document.getElementById('import-gpx-btn');
+const importGpxFile = document.getElementById('import-gpx-file');
+
+importGpxBtn.addEventListener('click', () => importGpxFile.click());
+
+importGpxFile.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  try {
+    const text = await file.text();
+    const points = parseGPX(text);
+
+    if (!points.length) {
+      showToast('El GPX no contiene puntos de traza.');
+      return;
+    }
+
+    if (state.importedGpxLayer) map.removeLayer(state.importedGpxLayer);
+
+    const latlngs = points.map(p => [p.lat, p.lon]);
+    state.importedGpxLayer = L.polyline(latlngs, { color: '#8e24aa', weight: 5, opacity: 0.85 }).addTo(map);
+    map.fitBounds(L.latLngBounds(latlngs), { padding: [40, 40] });
+
+    showToast(`GPX importado: ${points.length} puntos`);
+  } catch (err) {
+    console.error(err);
+    showToast('No se pudo leer el archivo GPX.');
+  } finally {
+    importGpxFile.value = '';
+  }
+});
+
+function parseGPX(xmlText) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xmlText, 'text/xml');
+  const points = [...doc.getElementsByTagName('trkpt'), ...doc.getElementsByTagName('rtept'), ...doc.getElementsByTagName('wpt')];
+
+  return points.map(pt => ({
+    lat: parseFloat(pt.getAttribute('lat')),
+    lon: parseFloat(pt.getAttribute('lon'))
+  })).filter(p => !isNaN(p.lat) && !isNaN(p.lon));
 }

@@ -6,6 +6,8 @@
 <title>Mapa</title>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
 <link rel="stylesheet" href="style.css" />
 <link rel="manifest" href="manifest.json" />
 <meta name="theme-color" content="#1a73e8" />
@@ -48,6 +50,13 @@
           <button class="chip" data-cat="atm">🏧 Cajeros</button>
         </div>
 
+        <div id="open-now-toggle-row" hidden>
+          <label>
+            <input type="checkbox" id="open-now-toggle" />
+            Solo abiertos ahora
+          </label>
+        </div>
+
         <div id="favorites-section">
           <div class="section-label">Favoritos</div>
           <ul id="favorites-list"></ul>
@@ -59,6 +68,14 @@
         </div>
 
         <ul id="results-list"></ul>
+
+        <div id="data-tools-row">
+          <button id="export-data-btn" class="text-btn">⬇ Exportar datos (JSON)</button>
+          <button id="import-data-btn" class="text-btn">⬆ Importar datos (JSON)</button>
+          <button id="import-gpx-btn" class="text-btn">⬆ Importar GPX</button>
+          <input type="file" id="import-data-file" accept=".json" hidden />
+          <input type="file" id="import-gpx-file" accept=".gpx" hidden />
+        </div>
       </div>
 
       <!-- ---- Panel: detalle de lugar con fotos ---- -->
@@ -91,7 +108,13 @@
               <svg viewBox="0 0 24 24" width="16" height="16"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 10-3-3c0 .24.04.47.09.7L7.04 9.81A3 3 0 104 12c0 .24.04.47.09.7L11.13 16.85c-.05.21-.08.43-.08.65a3 3 0 103-1.42z"/></svg>
               Compartir
             </button>
+            <button id="place-qr-btn" class="action-btn" title="Código QR">
+              <svg viewBox="0 0 24 24" width="16" height="16"><path d="M3 3h8v8H3V3zm2 2v4h4V5H5zm8-2h8v8h-8V3zm2 2v4h4V5h-4zM3 13h8v8H3v-8zm2 2v4h4v-4H5zm13-2h3v2h-3v-2zm-3 0h2v2h-2v-2zm3 3h3v3h-2v-2h-1v2h-2v-3h2zm-3 3h2v2h-2v-2z"/></svg>
+              QR
+            </button>
           </div>
+
+          <div id="place-qr-container" hidden></div>
 
           <div id="place-extract"></div>
           <div id="place-meta"></div>
@@ -127,6 +150,17 @@
           <button class="profile-btn" data-profile="foot">🚶 A pie</button>
         </div>
 
+        <div id="route-options-row">
+          <label id="depart-time-label">
+            Salgo a las
+            <input type="time" id="depart-time-input" />
+          </label>
+          <div id="route-type-toggle">
+            <button class="route-type-btn active" data-type="fastest">Más rápida</button>
+            <button class="route-type-btn" data-type="shortest">Más corta</button>
+          </div>
+        </div>
+
         <ul id="directions-suggestions" class="suggestion-list" hidden></ul>
 
         <div id="route-alternatives"></div>
@@ -154,12 +188,18 @@
   <div id="map-wrap">
     <div id="map"></div>
 
+    <button id="search-area-btn" class="floating-pill" hidden>🔍 Buscar en esta zona</button>
+
     <button id="locate-btn" class="icon-btn floating" title="Mi ubicación" aria-label="Mi ubicación">
       <svg viewBox="0 0 24 24" width="20" height="20"><path d="M12 2a1 1 0 011 1v1.06A8.004 8.004 0 0119.94 11H21a1 1 0 010 2h-1.06A8.004 8.004 0 0113 19.94V21a1 1 0 01-2 0v-1.06A8.004 8.004 0 014.06 13H3a1 1 0 010-2h1.06A8.004 8.004 0 0111 4.06V3a1 1 0 011-1zm0 4a6 6 0 100 12 6 6 0 000-12zm0 3a3 3 0 110 6 3 3 0 010-6z"/></svg>
     </button>
 
     <button id="layers-btn" class="icon-btn floating layers" title="Capas del mapa" aria-label="Capas del mapa">
       <svg viewBox="0 0 24 24" width="20" height="20"><path d="M12 2L1 9l11 7 9-5.73V17h2V9L12 2zM3.5 9L12 3.9 20.5 9 12 14.1 3.5 9zM12 15.5L4.24 10.6 3 11.38 12 17l9-5.62-1.24-.78L12 15.5z"/></svg>
+    </button>
+
+    <button id="draw-btn" class="icon-btn floating draw" title="Dibujar zona" aria-label="Dibujar zona">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
     </button>
 
     <div id="layers-menu" hidden>
@@ -172,10 +212,17 @@
       </label>
     </div>
 
+    <div id="draw-menu" hidden>
+      <button id="draw-start-btn" class="layer-option">✏️ Empezar a dibujar</button>
+      <button id="draw-finish-btn" class="layer-option" hidden>✅ Terminar zona</button>
+      <button id="draw-clear-btn" class="layer-option">🗑️ Borrar zona</button>
+    </div>
+
     <div id="toast" hidden></div>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

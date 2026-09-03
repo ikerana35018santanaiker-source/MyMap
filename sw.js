@@ -1,11 +1,14 @@
-const CACHE_NAME = 'mapa-shell-v1';
+const CACHE_NAME = 'mapa-shell-v2';
 const SHELL_FILES = [
   './index.html',
   './style.css',
   './app.js',
   './manifest.json',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
-  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
+  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
+  'https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css',
+  'https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css',
+  'https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js'
 ];
 
 self.addEventListener('install', (event) => {
