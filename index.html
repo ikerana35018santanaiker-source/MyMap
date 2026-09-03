@@ -7,6 +7,8 @@
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <link rel="stylesheet" href="style.css" />
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#1a73e8" />
 </head>
 <body>
 
@@ -46,6 +48,11 @@
           <button class="chip" data-cat="atm">🏧 Cajeros</button>
         </div>
 
+        <div id="favorites-section">
+          <div class="section-label">Favoritos</div>
+          <ul id="favorites-list"></ul>
+        </div>
+
         <div id="history-section">
           <div class="section-label">Búsquedas recientes</div>
           <ul id="history-list"></ul>
@@ -64,13 +71,21 @@
         <div id="place-photos"></div>
 
         <div id="place-info">
-          <h2 id="place-title"></h2>
+          <div class="place-title-row">
+            <h2 id="place-title"></h2>
+            <button id="place-fav-btn" class="icon-btn" title="Guardar en favoritos" aria-label="Guardar en favoritos">
+              <svg viewBox="0 0 24 24" width="22" height="22"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
+            </button>
+          </div>
           <p id="place-subtitle"></p>
+          <div id="place-hours"></div>
 
           <div class="place-actions">
-            <button id="place-directions-btn" class="action-btn primary">
-              <svg viewBox="0 0 24 24" width="16" height="16"><path d="M21.71 11.29l-9-9a1 1 0 00-1.42 0l-9 9a1 1 0 000 1.42l9 9a1 1 0 001.42 0l9-9a1 1 0 000-1.42zM14 14.5V12h-4v3H8v-4a1 1 0 011-1h5V7.5l3.5 3.5-3.5 3.5z"/></svg>
-              Cómo llegar
+            <button id="place-walk-btn" class="action-btn" title="Ir a pie">
+              🚶 A pie
+            </button>
+            <button id="place-drive-btn" class="action-btn" title="Ir en coche">
+              🚗 Coche
             </button>
             <button id="place-share-btn" class="action-btn">
               <svg viewBox="0 0 24 24" width="16" height="16"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 10-3-3c0 .24.04.47.09.7L7.04 9.81A3 3 0 104 12c0 .24.04.47.09.7L11.13 16.85c-.05.21-.08.43-.08.65a3 3 0 103-1.42z"/></svg>
@@ -78,6 +93,7 @@
             </button>
           </div>
 
+          <div id="place-extract"></div>
           <div id="place-meta"></div>
         </div>
       </div>
@@ -89,13 +105,20 @@
             <span class="dot origin-dot"></span>
             <input type="text" id="origin-input" placeholder="Elige un origen" autocomplete="off" />
           </div>
+
+          <div id="stops-container"></div>
+
           <div class="input-row">
             <span class="dot dest-dot"></span>
             <input type="text" id="dest-input" placeholder="Elige un destino" autocomplete="off" />
           </div>
-          <button id="swap-btn" class="icon-btn small" title="Intercambiar" aria-label="Intercambiar">
-            <svg viewBox="0 0 24 24" width="16" height="16"><path d="M7 10l5-5 5 5H7zm10 4l-5 5-5-5h10z"/></svg>
-          </button>
+
+          <div class="dir-tools-row">
+            <button id="add-stop-btn" class="text-btn">+ Añadir parada</button>
+            <button id="swap-btn" class="icon-btn small" title="Intercambiar" aria-label="Intercambiar">
+              <svg viewBox="0 0 24 24" width="16" height="16"><path d="M7 10l5-5 5 5H7zm10 4l-5 5-5-5h10z"/></svg>
+            </button>
+          </div>
         </div>
 
         <div id="profile-row">
@@ -106,7 +129,10 @@
 
         <ul id="directions-suggestions" class="suggestion-list" hidden></ul>
 
+        <div id="route-alternatives"></div>
         <div id="route-summary" hidden></div>
+        <button id="export-gpx-btn" class="text-btn" hidden>⬇ Exportar ruta (GPX)</button>
+        <p class="hint" id="drag-hint" hidden>Arrastra la línea azul para cambiar el trazado.</p>
         <ol id="route-steps"></ol>
       </div>
 
@@ -115,7 +141,10 @@
         <p class="hint">Haz clic en el mapa para añadir puntos y medir la distancia entre ellos.</p>
         <div id="measure-total"></div>
         <ol id="measure-points"></ol>
-        <button id="measure-clear" class="action-btn">Borrar medición</button>
+        <div class="measure-buttons-row">
+          <button id="measure-clear" class="action-btn">Borrar medición</button>
+          <button id="measure-export-btn" class="action-btn" hidden>⬇ Exportar GPX</button>
+        </div>
       </div>
 
     </div>
@@ -128,6 +157,20 @@
     <button id="locate-btn" class="icon-btn floating" title="Mi ubicación" aria-label="Mi ubicación">
       <svg viewBox="0 0 24 24" width="20" height="20"><path d="M12 2a1 1 0 011 1v1.06A8.004 8.004 0 0119.94 11H21a1 1 0 010 2h-1.06A8.004 8.004 0 0113 19.94V21a1 1 0 01-2 0v-1.06A8.004 8.004 0 014.06 13H3a1 1 0 010-2h1.06A8.004 8.004 0 0111 4.06V3a1 1 0 011-1zm0 4a6 6 0 100 12 6 6 0 000-12zm0 3a3 3 0 110 6 3 3 0 010-6z"/></svg>
     </button>
+
+    <button id="layers-btn" class="icon-btn floating layers" title="Capas del mapa" aria-label="Capas del mapa">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path d="M12 2L1 9l11 7 9-5.73V17h2V9L12 2zM3.5 9L12 3.9 20.5 9 12 14.1 3.5 9zM12 15.5L4.24 10.6 3 11.38 12 17l9-5.62-1.24-.78L12 15.5z"/></svg>
+    </button>
+
+    <div id="layers-menu" hidden>
+      <button class="layer-option active" data-layer="standard">🗺️ Estándar</button>
+      <button class="layer-option" data-layer="satellite">🛰️ Satélite</button>
+      <button class="layer-option" data-layer="dark">🌙 Oscuro</button>
+      <label class="layer-toggle">
+        <input type="checkbox" id="cycle-layer-toggle" />
+        🚲 Carriles bici
+      </label>
+    </div>
 
     <div id="toast" hidden></div>
   </div>

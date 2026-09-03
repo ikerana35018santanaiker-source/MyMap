@@ -1,0 +1,15 @@
+{
+  "name": "Mapa",
+  "short_name": "Mapa",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#1a73e8",
+  "icons": [
+    {
+      "src": "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+      "sizes": "50x82",
+      "type": "image/png"
+    }
+  ]
+}

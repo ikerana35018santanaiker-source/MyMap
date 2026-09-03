@@ -9,13 +9,20 @@ const state = {
   lastMarker: null,
   categoryLayer: null,
   routeLayer: null,
+  routeMarkers: [],
+  routeAlternatives: [],
+  selectedAltIndex: 0,
   measurePoints: [],        // [{lat, lon, marker}]
   measureLine: null,
   measureLabels: [],
   originCoords: null,
   destCoords: null,
+  stops: [],                // [{coords, el}]
   activeProfile: 'driving',
-  history: JSON.parse(localStorage.getItem('map_history') || '[]')
+  history: JSON.parse(localStorage.getItem('map_history') || '[]'),
+  favorites: JSON.parse(localStorage.getItem('map_favorites') || '[]'),
+  cycleLayer: null,
+  currentPlace: null
 };
 
 // ---------- Inicialización del mapa ----------
@@ -23,10 +30,70 @@ const map = L.map('map', { zoomControl: false }).setView([40.4168, -3.7038], 13)
 
 L.control.zoom({ position: 'bottomright' }).addTo(map);
 
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 19,
-  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-}).addTo(map);
+// ---------- Capas base (estándar / satélite / oscuro) ----------
+const baseLayers = {
+  standard: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+  }),
+  satellite: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom: 19,
+    attribution: 'Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics'
+  }),
+  dark: L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+  })
+};
+
+let currentBaseLayer = 'standard';
+baseLayers.standard.addTo(map);
+
+function setBaseLayer(name) {
+  if (name === currentBaseLayer) return;
+  map.removeLayer(baseLayers[currentBaseLayer]);
+  baseLayers[name].addTo(map);
+  currentBaseLayer = name;
+  document.body.classList.toggle('dark-mode', name === 'dark');
+
+  document.querySelectorAll('.layer-option').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.layer === name);
+  });
+}
+
+// ---------- Capa de carriles bici (tiles OSM Cyclosm, gratis) ----------
+const cycleTileLayer = L.tileLayer('https://{s}.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png', {
+  maxZoom: 20,
+  opacity: 0.75,
+  attribution: '&copy; CyclOSM'
+});
+
+document.getElementById('cycle-layer-toggle').addEventListener('change', (e) => {
+  if (e.target.checked) {
+    cycleTileLayer.addTo(map);
+  } else {
+    map.removeLayer(cycleTileLayer);
+  }
+});
+
+// ---------- Menú de capas ----------
+const layersBtn = document.getElementById('layers-btn');
+const layersMenu = document.getElementById('layers-menu');
+
+layersBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  layersMenu.hidden = !layersMenu.hidden;
+});
+
+document.querySelectorAll('.layer-option').forEach(btn => {
+  btn.addEventListener('click', () => setBaseLayer(btn.dataset.layer));
+});
+
+document.addEventListener('click', (e) => {
+  if (!layersMenu.hidden && !e.target.closest('#layers-menu') && !e.target.closest('#layers-btn')) {
+    layersMenu.hidden = true;
+  }
+});
 
 // ---------- Cargar ubicación compartida por link (?lat=&lon=&z=) ----------
 (function loadFromURL() {
@@ -170,6 +237,74 @@ function renderHistory() {
   });
 }
 renderHistory();
+
+/* ==========================================================
+   FAVORITOS
+   ========================================================== */
+function isFavorite(lat, lon) {
+  return state.favorites.some(f => Math.abs(f.lat - lat) < 0.0001 && Math.abs(f.lon - lon) < 0.0001);
+}
+
+function toggleFavorite(place) {
+  const { lat, lon } = place;
+  if (isFavorite(lat, lon)) {
+    state.favorites = state.favorites.filter(f => !(Math.abs(f.lat - lat) < 0.0001 && Math.abs(f.lon - lon) < 0.0001));
+  } else {
+    state.favorites.unshift({ lat, lon, name: place.name });
+    state.favorites = state.favorites.slice(0, 20);
+  }
+  localStorage.setItem('map_favorites', JSON.stringify(state.favorites));
+  renderFavorites();
+  updateFavButton();
+}
+
+function updateFavButton() {
+  const btn = document.getElementById('place-fav-btn');
+  if (!state.currentPlace) return;
+  btn.classList.toggle('active', isFavorite(state.currentPlace.lat, state.currentPlace.lon));
+}
+
+function renderFavorites() {
+  const section = document.getElementById('favorites-section');
+  const list = document.getElementById('favorites-list');
+  list.innerHTML = '';
+
+  if (!state.favorites.length) {
+    section.classList.remove('visible');
+    return;
+  }
+  section.classList.add('visible');
+
+  state.favorites.forEach((f, i) => {
+    const li = el('li');
+    const btn = el('button', 'list-item');
+    btn.innerHTML = `
+      <span class="list-icon fav-star">⭐</span>
+      <span class="list-text">
+        <span class="list-title">${f.name}</span>
+        <span class="list-subtitle">${f.lat.toFixed(4)}, ${f.lon.toFixed(4)}</span>
+      </span>
+    `;
+    const removeBtn = el('button', 'list-remove', '✕');
+    removeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      state.favorites.splice(i, 1);
+      localStorage.setItem('map_favorites', JSON.stringify(state.favorites));
+      renderFavorites();
+      updateFavButton();
+    });
+    btn.appendChild(removeBtn);
+    btn.addEventListener('click', () => openPlace({ display_name: f.name, lat: f.lat, lon: f.lon }));
+    li.appendChild(btn);
+    list.appendChild(li);
+  });
+}
+renderFavorites();
+
+document.getElementById('place-fav-btn').addEventListener('click', () => {
+  if (!state.currentPlace) return;
+  toggleFavorite(state.currentPlace);
+});
 
 /* ==========================================================
    BÚSQUEDA (Nominatim) + resultados en sidebar
@@ -383,13 +518,29 @@ async function openPlace(result) {
     <div>📍 ${lat.toFixed(5)}, ${lon.toFixed(5)}</div>
   `;
 
+  renderOpeningHours(result.extratags?.opening_hours);
+
   // Mostrar panel de lugar por encima del panel activo
   Object.values(panels).forEach(p => p.hidden = true);
   panels.place.hidden = false;
 
   state.currentPlace = { lat, lon, name };
+  updateFavButton();
 
   loadPlacePhotos(name);
+}
+
+function renderOpeningHours(raw) {
+  const hoursEl = document.getElementById('place-hours');
+  if (!raw) {
+    hoursEl.classList.remove('visible');
+    hoursEl.innerHTML = '';
+    return;
+  }
+  // Heurística simple: no interpretamos el horario completo (formato OSM
+  // es complejo), solo mostramos el texto crudo con un icono de reloj.
+  hoursEl.classList.add('visible');
+  hoursEl.innerHTML = `🕐 <span>${raw}</span>`;
 }
 
 document.getElementById('place-back').addEventListener('click', () => {
@@ -397,14 +548,21 @@ document.getElementById('place-back').addEventListener('click', () => {
   setMode(state.mode);
 });
 
-document.getElementById('place-directions-btn').addEventListener('click', () => {
+function goToDirectionsFrom(profile) {
   if (!state.currentPlace) return;
   panels.place.hidden = true;
   setMode('directions');
   document.getElementById('dest-input').value = state.currentPlace.name;
   state.destCoords = { lat: state.currentPlace.lat, lon: state.currentPlace.lon };
+
+  document.querySelectorAll('.profile-btn').forEach(b => b.classList.toggle('active', b.dataset.profile === profile));
+  state.activeProfile = profile;
+
   maybeDrawRoute();
-});
+}
+
+document.getElementById('place-walk-btn').addEventListener('click', () => goToDirectionsFrom('foot'));
+document.getElementById('place-drive-btn').addEventListener('click', () => goToDirectionsFrom('driving'));
 
 document.getElementById('place-share-btn').addEventListener('click', () => {
   if (!state.currentPlace) return;
@@ -419,8 +577,11 @@ document.getElementById('place-share-btn').addEventListener('click', () => {
 
 async function loadPlacePhotos(name) {
   const container = document.getElementById('place-photos');
+  const extractEl = document.getElementById('place-extract');
   container.className = '';
   container.innerHTML = '<div class="hint" style="padding:12px 16px;">Buscando fotos...</div>';
+  extractEl.classList.remove('visible');
+  extractEl.innerHTML = '';
 
   try {
     // Buscar página de Wikipedia relacionada
@@ -433,6 +594,9 @@ async function loadPlacePhotos(name) {
       renderNoPhotos();
       return;
     }
+
+    // Extracto de texto (resumen) de la página
+    loadWikiExtract(page.title, extractEl);
 
     // Obtener imágenes de esa página vía Wikimedia REST (page media)
     const mediaUrl = `https://es.wikipedia.org/api/rest_v1/page/media-list/${encodeURIComponent(page.title)}`;
@@ -466,6 +630,25 @@ async function loadPlacePhotos(name) {
   function renderNoPhotos() {
     container.className = 'empty';
     container.innerHTML = 'No hay fotos disponibles';
+  }
+}
+
+async function loadWikiExtract(title, extractEl) {
+  try {
+    const url = `https://es.wikipedia.org/w/api.php?action=query&prop=extracts&exintro=1&explaintext=1&titles=${encodeURIComponent(title)}&format=json&origin=*`;
+    const res = await fetch(url);
+    const data = await res.json();
+    const pages = data.query?.pages || {};
+    const page = Object.values(pages)[0];
+    const extract = page?.extract;
+
+    if (extract) {
+      extractEl.classList.add('visible');
+      const short = extract.length > 400 ? extract.slice(0, 400).trim() + '…' : extract;
+      extractEl.textContent = short;
+    }
+  } catch (err) {
+    console.error(err);
   }
 }
 
@@ -524,12 +707,21 @@ function renderDirSuggestions(results) {
     `;
     btn.addEventListener('click', () => {
       const coords = { lat: parseFloat(r.lat), lon: parseFloat(r.lon) };
+      const placeName = r.display_name.split(',')[0];
+
       if (activeDirField === 'origin') {
-        originInput.value = r.display_name.split(',')[0];
+        originInput.value = placeName;
         state.originCoords = coords;
-      } else {
-        destInput.value = r.display_name.split(',')[0];
+      } else if (activeDirField === 'dest') {
+        destInput.value = placeName;
         state.destCoords = coords;
+      } else {
+        // Es una parada intermedia
+        const stop = state.stops.find(s => s.id === activeDirField);
+        if (stop) {
+          stop.input.value = placeName;
+          stop.coords = coords;
+        }
       }
       dirSuggestions.hidden = true;
       maybeDrawRoute();
@@ -551,6 +743,46 @@ document.getElementById('swap-btn').addEventListener('click', () => {
   maybeDrawRoute();
 });
 
+/* ---- Paradas intermedias ---- */
+const stopsContainer = document.getElementById('stops-container');
+
+document.getElementById('add-stop-btn').addEventListener('click', () => {
+  addStopField();
+});
+
+function addStopField() {
+  const stopId = 'stop_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+  const row = el('div', 'stop-row');
+  row.dataset.stopId = stopId;
+  row.innerHTML = `
+    <span class="dot"></span>
+    <input type="text" placeholder="Añadir parada" autocomplete="off" />
+    <button class="stop-remove" aria-label="Quitar parada">✕</button>
+  `;
+
+  const input = row.querySelector('input');
+  const removeBtn = row.querySelector('.stop-remove');
+
+  let stopDebounce = null;
+  input.addEventListener('input', () => {
+    activeDirField = stopId;
+    clearTimeout(stopDebounce);
+    const q = input.value.trim();
+    if (q.length < 3) { dirSuggestions.hidden = true; return; }
+    stopDebounce = setTimeout(() => searchDirSuggestions(q), 400);
+  });
+
+  removeBtn.addEventListener('click', () => {
+    state.stops = state.stops.filter(s => s.id !== stopId);
+    row.remove();
+    maybeDrawRoute();
+  });
+
+  stopsContainer.appendChild(row);
+  state.stops.push({ id: stopId, coords: null, input, row });
+  input.focus();
+}
+
 document.querySelectorAll('.profile-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.profile-btn').forEach(b => b.classList.remove('active'));
@@ -566,14 +798,26 @@ function maybeDrawRoute() {
   }
 }
 
-async function drawRoute(origin, dest, profile) {
+function getWaypoints() {
+  const stopCoords = state.stops.filter(s => s.coords).map(s => s.coords);
+  return [state.originCoords, ...stopCoords, state.destCoords];
+}
+
+async function drawRoute(origin, dest, profile, viaOverride) {
   clearRoute();
   showToast('Calculando ruta...', 1200);
 
   const profileMap = { driving: 'driving', cycling: 'cycling', foot: 'foot' };
   const p = profileMap[profile] || 'driving';
 
-  const url = `https://router.project-osrm.org/route/v1/${p}/${origin.lon},${origin.lat};${dest.lon},${dest.lat}?overview=full&geometries=geojson&steps=true`;
+  const waypoints = viaOverride || getWaypoints();
+  const coordStr = waypoints.map(w => `${w.lon},${w.lat}`).join(';');
+  const hasStops = waypoints.length > 2;
+
+  // Alternativas solo tienen sentido sin paradas intermedias (limitación de OSRM)
+  const alternatives = !hasStops;
+
+  const url = `https://router.project-osrm.org/route/v1/${p}/${coordStr}?overview=full&geometries=geojson&steps=true&alternatives=${alternatives}`;
 
   try {
     const res = await fetch(url);
@@ -584,22 +828,103 @@ async function drawRoute(origin, dest, profile) {
       return;
     }
 
-    const route = data.routes[0];
-    const coords = route.geometry.coordinates.map(c => [c[1], c[0]]);
+    state.routeAlternatives = data.routes;
+    state.selectedAltIndex = 0;
+    state.currentWaypoints = waypoints;
 
-    state.routeLayer = L.layerGroup([
-      L.polyline(coords, { color: '#1a73e8', weight: 6, opacity: 0.85 }),
-      L.marker([origin.lat, origin.lon]),
-      L.marker([dest.lat, dest.lon])
-    ]).addTo(map);
-
-    map.fitBounds(L.latLngBounds(coords), { padding: [40, 40] });
-
-    renderRouteSummary(route);
+    renderAlternatives(data.routes, alternatives);
+    renderRoute(data.routes[0], waypoints);
   } catch (err) {
     console.error(err);
     showToast('No se pudo calcular la ruta.');
   }
+}
+
+function renderAlternatives(routes, show) {
+  const container = document.getElementById('route-alternatives');
+  container.innerHTML = '';
+
+  if (!show || routes.length < 2) return;
+
+  routes.forEach((route, i) => {
+    const opt = el('div', 'alt-option' + (i === 0 ? ' selected' : ''));
+    opt.innerHTML = `
+      <span class="alt-time">${formatDuration(route.duration)}</span>
+      <span class="alt-dist">${formatDistance(route.distance / 1000)}</span>
+    `;
+    opt.addEventListener('click', () => {
+      state.selectedAltIndex = i;
+      document.querySelectorAll('.alt-option').forEach((o, oi) => o.classList.toggle('selected', oi === i));
+      renderRoute(routes[i], state.currentWaypoints);
+    });
+    container.appendChild(opt);
+  });
+}
+
+function renderRoute(route, waypoints) {
+  if (state.routeLayer) map.removeLayer(state.routeLayer);
+  state.routeMarkers.forEach(m => map.removeLayer(m));
+  state.routeMarkers = [];
+
+  const coords = route.geometry.coordinates.map(c => [c[1], c[0]]);
+
+  const line = L.polyline(coords, { color: '#1a73e8', weight: 6, opacity: 0.85 });
+  state.routeLayer = line.addTo(map);
+
+  // Habilitar arrastre del trazado para forzar un camino distinto
+  enableRouteDragging(line, waypoints);
+
+  waypoints.forEach((wp, i) => {
+    const isOrigin = i === 0;
+    const isDest = i === waypoints.length - 1;
+    const color = isOrigin ? '#1a73e8' : isDest ? '#d93025' : '#5f6368';
+    const marker = L.marker([wp.lat, wp.lon], {
+      icon: L.divIcon({
+        className: '',
+        html: `<div style="background:${color};color:#fff;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;box-shadow:0 2px 6px rgba(0,0,0,0.3);border:2px solid #fff;">${isOrigin ? 'A' : isDest ? 'B' : i}</div>`,
+        iconSize: [22, 22],
+        iconAnchor: [11, 11]
+      })
+    }).addTo(map);
+    state.routeMarkers.push(marker);
+  });
+
+  map.fitBounds(L.latLngBounds(coords), { padding: [40, 40] });
+
+  renderRouteSummary(route);
+  document.getElementById('export-gpx-btn').hidden = false;
+  document.getElementById('drag-hint').hidden = false;
+}
+
+// Arrastrar la línea de la ruta inserta un punto intermedio ahí y
+// recalcula usando ese punto como parada forzada.
+function enableRouteDragging(line, waypoints) {
+  let dragging = false;
+
+  // Quitar handlers de un arrastre anterior antes de registrar los nuevos,
+  // así evitamos acumular listeners cada vez que se recalcula la ruta.
+  map.off('mouseup', map._routeDragHandler);
+
+  line.on('mousedown', (e) => {
+    dragging = true;
+    map.dragging.disable();
+    L.DomEvent.stopPropagation(e);
+  });
+
+  map._routeDragHandler = async (e) => {
+    if (!dragging) return;
+    dragging = false;
+    map.dragging.enable();
+
+    // Insertar el punto soltado como parada nueva entre origen y destino
+    const dropPoint = { lat: e.latlng.lat, lon: e.latlng.lng };
+    const newWaypoints = [waypoints[0], dropPoint, waypoints[waypoints.length - 1]];
+
+    showToast('Recalculando con el nuevo punto...', 1200);
+    await drawRoute(waypoints[0], waypoints[waypoints.length - 1], state.activeProfile, newWaypoints);
+  };
+
+  map.on('mouseup', map._routeDragHandler);
 }
 
 function clearRoute() {
@@ -607,6 +932,11 @@ function clearRoute() {
     map.removeLayer(state.routeLayer);
     state.routeLayer = null;
   }
+  state.routeMarkers.forEach(m => map.removeLayer(m));
+  state.routeMarkers = [];
+  document.getElementById('route-alternatives').innerHTML = '';
+  document.getElementById('export-gpx-btn').hidden = true;
+  document.getElementById('drag-hint').hidden = true;
 }
 
 function renderRouteSummary(route) {
@@ -620,8 +950,8 @@ function renderRouteSummary(route) {
   const stepsList = document.getElementById('route-steps');
   stepsList.innerHTML = '';
 
-  const steps = route.legs?.[0]?.steps || [];
-  steps.forEach((step, i) => {
+  const allSteps = (route.legs || []).flatMap(leg => leg.steps || []);
+  allSteps.forEach((step, i) => {
     const li = el('li');
     const instruction = describeStep(step);
     li.innerHTML = `
@@ -633,6 +963,39 @@ function renderRouteSummary(route) {
     `;
     stepsList.appendChild(li);
   });
+
+  state.currentRoute = route;
+}
+
+/* ---- Exportar ruta como GPX ---- */
+document.getElementById('export-gpx-btn').addEventListener('click', () => {
+  if (!state.currentRoute) return;
+  const coords = state.currentRoute.geometry.coordinates; // [lon, lat]
+  const gpx = buildGPX(coords, 'Ruta');
+  downloadFile('ruta.gpx', gpx);
+});
+
+function buildGPX(lonLatPairs, name) {
+  const points = lonLatPairs.map(([lon, lat]) => `      <trkpt lat="${lat}" lon="${lon}"></trkpt>`).join('\n');
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Mapa" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk>
+    <name>${name}</name>
+    <trkseg>
+${points}
+    </trkseg>
+  </trk>
+</gpx>`;
+}
+
+function downloadFile(filename, content) {
+  const blob = new Blob([content], { type: 'application/gpx+xml' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 function describeStep(step) {
@@ -742,12 +1105,21 @@ function redrawMeasure() {
     `;
     pointsList.appendChild(li);
   });
+
+  document.getElementById('measure-export-btn').hidden = state.measurePoints.length < 2;
 }
 
 document.getElementById('measure-clear').addEventListener('click', () => {
   state.measurePoints.forEach(p => map.removeLayer(p.marker));
   state.measurePoints = [];
   redrawMeasure();
+});
+
+document.getElementById('measure-export-btn').addEventListener('click', () => {
+  if (state.measurePoints.length < 2) return;
+  const pairs = state.measurePoints.map(p => [p.lon, p.lat]);
+  const gpx = buildGPX(pairs, 'Medición');
+  downloadFile('medicion.gpx', gpx);
 });
 
 /* ==========================================================
@@ -782,3 +1154,14 @@ document.addEventListener('click', (e) => {
     dirSuggestions.hidden = true;
   }
 });
+
+/* ==========================================================
+   PWA — registro del service worker
+   ========================================================== */
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(err => {
+      console.warn('No se pudo registrar el service worker:', err);
+    });
+  });
+}
